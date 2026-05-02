@@ -386,7 +386,7 @@
             <!-- TAB 1: SEARCH -->
             <div id="search" class="tab-content active">
                 <div class="controls">
-                    <input type="text" id="searchInput" placeholder="Token address (0x...)" />
+                    <input type="text" id="searchInput" placeholder="Search token (RAY, SOL, ETH, etc)" />
                     <button onclick="searchToken()" style="width: auto;">Search</button>
                 </div>
                 <div id="searchResults"></div>
@@ -417,7 +417,7 @@
 
     <script>
         let currentView = 'search';
-let serverUrl = 'https://token-analyzer-proxy.onrender.com';
+        let serverUrl = 'https://token-analyzer-proxy.onrender.com';
 
         // Check server connection
         async function checkServerConnection() {
@@ -438,37 +438,52 @@ let serverUrl = 'https://token-analyzer-proxy.onrender.com';
         async function searchToken() {
             const input = document.getElementById('searchInput').value.trim();
             if (!input) {
-                showMessage('Enter token address or name', 'error');
+                showMessage('Enter token name (RAY, SOL, ETH, etc)', 'error');
                 return;
             }
 
             showMessage('Searching...', 'info');
 
             try {
-                // Assume it's a pair address: chainId/pairAddress
-                const parts = input.split('/');
-                let chainId = 'solana';
-                let pairId = input;
-
-                if (parts.length >= 2) {
-                    chainId = parts[0];
-                    pairId = parts[parts.length - 1];
-                }
-
-                const response = await fetch(`${serverUrl}/pairs/${chainId}/${pairId}`);
+                const response = await fetch(`${serverUrl}/search?q=${encodeURIComponent(input)}`);
                 
                 if (!response.ok) {
-                    throw new Error('Token not found');
+                    throw new Error('Search failed');
                 }
 
                 const data = await response.json();
-                if (!data.pair) {
-                    throw new Error('No pair data found');
+                const pairs = data.pairs || [];
+
+                if (pairs.length === 0) {
+                    throw new Error('No tokens found');
                 }
 
-                displayAnalysis(data.pair);
+                let html = '<div class="tokens-grid">';
+                pairs.slice(0, 10).forEach((pair, idx) => {
+                    const change = parseFloat(pair.priceChange?.h24) || 0;
+                    const changeClass = change >= 0 ? 'positive' : 'negative';
+                    
+                    html += `
+                        <div class="token-card" onclick="displayAnalysis(${JSON.stringify(pair).replace(/"/g, '&quot;')})">
+                            <div class="token-rank">#${idx + 1}</div>
+                            <div class="token-name">${pair.baseToken?.name || 'Unknown'}</div>
+                            <div class="token-symbol">${pair.baseToken?.symbol || 'N/A'}</div>
+                            <div class="token-price">$${formatPrice(parseFloat(pair.priceUsd))}</div>
+                            <div class="token-info">
+                                <span class="${changeClass}">24h: ${change.toFixed(2)}%</span>
+                            </div>
+                            <div class="token-info">Vol: $${formatNumber(pair.volume?.h24 || 0)}</div>
+                            <div class="token-info">Liq: $${formatNumber(pair.liquidity?.usd || 0)}</div>
+                            <button class="analyze-btn" onclick="displayAnalysis(${JSON.stringify(pair).replace(/"/g, '&quot;')}); return false;">Analyze</button>
+                        </div>
+                    `;
+                });
+                html += '</div>';
+
+                document.getElementById('searchResults').innerHTML = html;
+                showMessage(`✅ Found ${pairs.length} tokens`, 'success');
             } catch (error) {
-                showMessage(`Error: ${error.message}`, 'error');
+                document.getElementById('searchResults').innerHTML = `<div class="message error">❌ ${error.message}</div>`;
             }
         }
 
@@ -515,7 +530,7 @@ let serverUrl = 'https://token-analyzer-proxy.onrender.com';
                 html += '</div>';
 
                 container.innerHTML = html;
-                showMessage(`✅ Loaded ${pairs.length} real tokens`, 'success');
+                showMessage(`✅ Loaded ${pairs.length} real tokens from ${chainId}`, 'success');
             } catch (error) {
                 container.innerHTML = `<div class="message error">❌ ${error.message}</div>`;
             }
@@ -562,6 +577,10 @@ let serverUrl = 'https://token-analyzer-proxy.onrender.com';
                             <span class="metric-label">Price</span>
                             <span class="metric-value">$${formatPrice(price)}</span>
                         </div>
+                        <div class="metric">
+                            <span class="metric-label">Chain</span>
+                            <span class="metric-value">${pair.chainId?.toUpperCase() || 'Unknown'}</span>
+                        </div>
                     </div>
 
                     <div class="card">
@@ -578,7 +597,7 @@ let serverUrl = 'https://token-analyzer-proxy.onrender.com';
                     </div>
 
                     <div class="card">
-                        <h2>📈 Trades</h2>
+                        <h2>📈 Trades (24h)</h2>
                         <div class="metric">
                             <span class="metric-label">Total</span>
                             <span class="metric-value">${(buys + sells).toLocaleString()}</span>
@@ -616,13 +635,25 @@ let serverUrl = 'https://token-analyzer-proxy.onrender.com';
                             <span class="metric-value ${change24h >= 0 ? 'positive' : 'negative'}">${change24h.toFixed(2)}%</span>
                         </div>
                     </div>
+
+                    <div class="card">
+                        <h2>🔗 Details</h2>
+                        <div class="metric">
+                            <span class="metric-label">DEX</span>
+                            <span class="metric-value">${pair.dexId || 'Unknown'}</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Source</span>
+                            <span class="metric-value">Dexscreener</span>
+                        </div>
+                    </div>
                 </div>
             `;
 
             document.getElementById('analysisContainer').innerHTML = html;
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
             document.getElementById('analysisView').classList.add('active');
-            showMessage(`✅ Real data from ${pair.dexId || 'DEX'}`, 'success');
+            showMessage(`✅ Real data from Dexscreener`, 'success');
         }
 
         function switchTab(tabName) {
