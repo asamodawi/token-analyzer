@@ -1,6 +1,6 @@
 // server.js
-// Express server with proper rate limiting queue for Dexscreener API
-// Prevents 429 (Too Many Requests) errors
+// Express server with AGGRESSIVE rate limiting for Dexscreener API
+// Uses 2-second delays and request deduplication
 
 const express = require('express');
 const cors = require('cors');
@@ -12,15 +12,17 @@ app.use(express.json());
 
 const DEXSCREENER_API = 'https://api.dexscreener.com/latest';
 
-// Request queue and rate limiting
-const requestQueue = [];
-let isProcessing = false;
-const RATE_LIMIT_DELAY = 1000; // 1 second between requests to Dexscreener
-const REQUEST_TIMEOUT = 15000;
+// Aggressive rate limiting
+let lastRequestTime = 0;
+const RATE_LIMIT_DELAY = 2000; // 2 seconds between requests
+const REQUEST_TIMEOUT = 20000;
 
-// Cache with longer TTL
+// Cache with long TTL
 const cache = new Map();
-const CACHE_TTL = 60000; // 60 seconds
+const CACHE_TTL = 120000; // 2 minutes
+
+// In-flight requests to prevent duplicates
+const inFlightRequests = new Map();
 
 function getCacheKey(url) {
     return url;
@@ -33,6 +35,7 @@ function getCached(key) {
         cache.delete(key);
         return null;
     }
+    console.log(`[CACHE HIT] ${key}`);
     return item.data;
 }
 
@@ -40,54 +43,63 @@ function setCached(key, data) {
     cache.set(key, { data, time: Date.now() });
 }
 
-// Queue-based request processor
-async function processQueue() {
-    if (isProcessing || requestQueue.length === 0) return;
-    
-    isProcessing = true;
-    
-    while (requestQueue.length > 0) {
-        const { url, resolve, reject } = requestQueue.shift();
-        
-        try {
-            console.log(`[QUEUE] Processing: ${url}`);
-            const response = await axios.get(url, { timeout: REQUEST_TIMEOUT });
-            resolve(response.data);
-        } catch (error) {
-            console.error(`[QUEUE ERROR] ${url}: ${error.message}`);
-            reject(error);
-        }
-        
-        // Wait before next request
-        if (requestQueue.length > 0) {
-            await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_DELAY));
-        }
+async function throttledRequest(url) {
+    // Check cache first
+    const cached = getCached(url);
+    if (cached) {
+        return cached;
     }
     
-    isProcessing = false;
-}
-
-function queueRequest(url) {
-    return new Promise((resolve, reject) => {
-        // Check cache first
-        const cached = getCached(url);
-        if (cached) {
-            console.log(`[CACHE HIT] ${url}`);
-            return resolve(cached);
+    // Check if request is already in flight
+    if (inFlightRequests.has(url)) {
+        console.log(`[IN-FLIGHT] Waiting for duplicate request: ${url}`);
+        return inFlightRequests.get(url);
+    }
+    
+    // Create promise for this request
+    const requestPromise = (async () => {
+        // Wait for rate limit
+        const timeSinceLastRequest = Date.now() - lastRequestTime;
+        const waitTime = Math.max(0, RATE_LIMIT_DELAY - timeSinceLastRequest);
+        
+        if (waitTime > 0) {
+            console.log(`[WAIT] Waiting ${waitTime}ms before request to Dexscreener`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
         }
         
-        requestQueue.push({ url, resolve, reject });
-        console.log(`[QUEUED] ${url} (queue size: ${requestQueue.length})`);
-        processQueue();
-    });
+        lastRequestTime = Date.now();
+        
+        try {
+            console.log(`[API CALL] ${url}`);
+            const response = await axios.get(url, { 
+                timeout: REQUEST_TIMEOUT,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+            });
+            
+            console.log(`[SUCCESS] ${url}`);
+            setCached(getCacheKey(url), response.data);
+            inFlightRequests.delete(url);
+            return response.data;
+        } catch (error) {
+            inFlightRequests.delete(url);
+            console.error(`[API ERROR] ${url}: ${error.response?.status || error.message}`);
+            throw error;
+        }
+    })();
+    
+    // Store in-flight request
+    inFlightRequests.set(url, requestPromise);
+    return requestPromise;
 }
 
 // Health check endpoint
 app.get('/health', (req, res) => {
     res.json({ 
         status: 'Server running',
-        queueSize: requestQueue.length,
         cacheSize: cache.size,
+        inFlightRequests: inFlightRequests.size,
         timestamp: new Date() 
     });
 });
@@ -98,8 +110,7 @@ app.get('/pairs/:chainId/:pairId', async (req, res) => {
         const { chainId, pairId } = req.params;
         const url = `${DEXSCREENER_API}/dex/pairs/${chainId}/${pairId}`;
         
-        const data = await queueRequest(url);
-        setCached(getCacheKey(url), data);
+        const data = await throttledRequest(url);
         res.json(data);
     } catch (error) {
         console.error('Error fetching pair:', error.message);
@@ -118,16 +129,16 @@ app.get('/search', async (req, res) => {
             url += `&chainId=${chainId}`;
         }
         
-        console.log(`[SEARCH] Query: ${searchQuery}, Chain: ${chainId || 'all'}`);
-        const data = await queueRequest(url);
+        console.log(`[SEARCH REQUEST] Query: "${searchQuery}" Chain: ${chainId || 'all'}`);
+        const data = await throttledRequest(url);
         
-        setCached(getCacheKey(url), data);
         res.json(data);
     } catch (error) {
         console.error('Error searching:', error.message);
         res.status(500).json({ 
             error: `Search failed: ${error.message}`,
-            query: req.query.q
+            query: req.query.q,
+            suggestion: 'Try waiting 30 seconds and searching again'
         });
     }
 });
@@ -138,7 +149,8 @@ app.get('/top-tokens/:chainId', async (req, res) => {
         const { chainId } = req.params;
         const url = `${DEXSCREENER_API}/dex/search?chainId=${chainId}`;
         
-        const data = await queueRequest(url);
+        console.log(`[TOP TOKENS REQUEST] Chain: ${chainId}`);
+        const data = await throttledRequest(url);
         
         // Sort by volume and limit to top 20
         const pairs = (data.pairs || [])
@@ -147,7 +159,6 @@ app.get('/top-tokens/:chainId', async (req, res) => {
             .slice(0, 20);
         
         const result = { pairs, chainId, count: pairs.length };
-        setCached(getCacheKey(url), result);
         res.json(result);
     } catch (error) {
         console.error('Error fetching top tokens:', error.message);
@@ -161,8 +172,7 @@ app.get('/token-profiles/:type', async (req, res) => {
         const { type } = req.params;
         const url = `${DEXSCREENER_API}/../token-profiles/${type}/v1`;
         
-        const data = await queueRequest(url);
-        setCached(getCacheKey(url), data);
+        const data = await throttledRequest(url);
         res.json(data);
     } catch (error) {
         console.error('Error fetching token profiles:', error.message);
@@ -176,8 +186,7 @@ app.get('/token-boosts/:type', async (req, res) => {
         const { type } = req.params;
         const url = `${DEXSCREENER_API}/../token-boosts/${type}/v1`;
         
-        const data = await queueRequest(url);
-        setCached(getCacheKey(url), data);
+        const data = await throttledRequest(url);
         res.json(data);
     } catch (error) {
         console.error('Error fetching token boosts:', error.message);
@@ -197,6 +206,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Proxy server running on port ${PORT}`);
     console.log(`📊 Health check: http://localhost:${PORT}/health`);
-    console.log(`⏱️  Rate limit: 1 second between Dexscreener API calls`);
-    console.log(`💾 Cache TTL: 60 seconds`);
+    console.log(`⏱️  AGGRESSIVE Rate limit: 2 seconds between Dexscreener API calls`);
+    console.log(`💾 Cache TTL: 120 seconds`);
+    console.log(`🔄 Request deduplication: enabled`);
 });
