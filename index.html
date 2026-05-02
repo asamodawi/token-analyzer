@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <title>Token Analyzer - Real Data</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        header {
+            background: white;
+            padding: 12px 16px;
+            padding-top: max(12px, env(safe-area-inset-top));
+            border-bottom: 1px solid #e0e0e0;
+            flex-shrink: 0;
+        }
+
+        h1 {
+            color: #667eea;
+            font-size: 20px;
+            margin-bottom: 8px;
+        }
+
+        .server-status {
+            font-size: 11px;
+            color: #999;
+            margin-bottom: 8px;
+        }
+
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 4px;
+        }
+
+        .status-dot.connected {
+            background: #22c55e;
+        }
+
+        .status-dot.disconnected {
+            background: #ef4444;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 6px;
+            overflow-x: auto;
+            padding: 0 12px;
+        }
+
+        .tabs::-webkit-scrollbar {
+            display: none;
+        }
+
+        .tab-btn {
+            padding: 8px 12px;
+            background: #f0f0f0;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 12px;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        .tab-btn.active {
+            background: #667eea;
+            color: white;
+        }
+
+        .content {
+            flex: 1;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            padding: 12px;
+            padding-bottom: calc(12px + env(safe-area-inset-bottom));
+        }
+
+        .content::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .content::-webkit-scrollbar-thumb {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 2px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+
+        input, select, button {
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            -webkit-appearance: none;
+            appearance: none;
+        }
+
+        input, select {
+            background: white;
+            color: #333;
+            flex: 1;
+            min-width: 100px;
+        }
+
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            cursor: pointer;
+            padding: 10px 14px;
+            flex-shrink: 0;
+        }
+
+        button:active {
+            background: #5568d3;
+        }
+
+        button:disabled {
+            background: #999;
+        }
+
+        .message {
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            font-size: 12px;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateY(-20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        .error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .success {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .info {
+            background: #dbeafe;
+            color: #0c2d6d;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: white;
+        }
+
+        .spinner {
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top: 3px solid white;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .tokens-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+        }
+
+        .token-card {
+            background: white;
+            border-radius: 8px;
+            padding: 12px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            cursor: pointer;
+        }
+
+        .token-card:active {
+            transform: scale(0.98);
+        }
+
+        .token-rank {
+            font-size: 16px;
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 4px;
+        }
+
+        .token-name {
+            font-weight: 700;
+            font-size: 14px;
+            margin-bottom: 2px;
+        }
+
+        .token-symbol {
+            font-size: 11px;
+            color: #999;
+            margin-bottom: 6px;
+        }
+
+        .token-price {
+            font-size: 16px;
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 4px;
+        }
+
+        .token-info {
+            font-size: 11px;
+            color: #666;
+            margin: 3px 0;
+        }
+
+        .positive {
+            color: #22c55e;
+        }
+
+        .negative {
+            color: #ef4444;
+        }
+
+        .analyze-btn {
+            width: 100%;
+            margin-top: 8px;
+            padding: 10px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 12px;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 12px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .card h2 {
+            color: #667eea;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+            border-bottom: 2px solid #f0f0f0;
+            padding-bottom: 8px;
+        }
+
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            border-bottom: 1px solid #f5f5f5;
+            font-size: 12px;
+        }
+
+        .metric:last-child {
+            border-bottom: none;
+        }
+
+        .metric-label {
+            color: #666;
+            font-weight: 500;
+        }
+
+        .metric-value {
+            font-weight: 700;
+            color: #333;
+            text-align: right;
+            word-break: break-word;
+            max-width: 200px;
+        }
+
+        .score-circle {
+            width: 70px;
+            height: 70px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 10px;
+            font-size: 28px;
+            font-weight: 700;
+            color: white;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .back-btn {
+            margin-bottom: 10px;
+            padding: 10px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 12px;
+            width: 100%;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔥 Token Analyzer</h1>
+            <div class="server-status">
+                <span class="status-dot disconnected" id="statusDot"></span>
+                <span id="statusText">Checking server...</span>
+            </div>
+            
+            <div class="tabs">
+                <button class="tab-btn active" onclick="switchTab('search')">🔍 Search</button>
+                <button class="tab-btn" onclick="switchTab('top10')">⭐ Top 10</button>
+            </div>
+        </header>
+
+        <div class="content">
+            <div id="messageContainer"></div>
+
+            <!-- TAB 1: SEARCH -->
+            <div id="search" class="tab-content active">
+                <div class="controls">
+                    <input type="text" id="searchInput" placeholder="Token address (0x...)" />
+                    <button onclick="searchToken()" style="width: auto;">Search</button>
+                </div>
+                <div id="searchResults"></div>
+            </div>
+
+            <!-- TAB 2: TOP 10 -->
+            <div id="top10" class="tab-content hidden">
+                <div class="controls">
+                    <select id="chainSelect" style="flex: 1;">
+                        <option value="solana">Solana</option>
+                        <option value="ethereum">Ethereum</option>
+                        <option value="bsc">BSC</option>
+                        <option value="polygon">Polygon</option>
+                        <option value="arbitrum">Arbitrum</option>
+                    </select>
+                    <button onclick="loadTop10()" style="width: auto;">Load</button>
+                </div>
+                <div id="top10Results"></div>
+            </div>
+
+            <!-- ANALYSIS VIEW -->
+            <div id="analysisView" class="hidden">
+                <button class="back-btn" onclick="backToList()">← Back</button>
+                <div id="analysisContainer"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentView = 'search';
+        let serverUrl = window.location.origin; // Use same server as frontend
+        // For local development, use: let serverUrl = 'http://localhost:3000';
+
+        // Check server connection
+        async function checkServerConnection() {
+            try {
+                const response = await fetch(`${serverUrl}/health`);
+                if (response.ok) {
+                    document.getElementById('statusDot').className = 'status-dot connected';
+                    document.getElementById('statusText').textContent = 'Server connected ✓';
+                    return true;
+                }
+            } catch (error) {
+                document.getElementById('statusDot').className = 'status-dot disconnected';
+                document.getElementById('statusText').textContent = 'Server offline ✗';
+            }
+            return false;
+        }
+
+        async function searchToken() {
+            const input = document.getElementById('searchInput').value.trim();
+            if (!input) {
+                showMessage('Enter token address or name', 'error');
+                return;
+            }
+
+            showMessage('Searching...', 'info');
+
+            try {
+                // Assume it's a pair address: chainId/pairAddress
+                const parts = input.split('/');
+                let chainId = 'solana';
+                let pairId = input;
+
+                if (parts.length >= 2) {
+                    chainId = parts[0];
+                    pairId = parts[parts.length - 1];
+                }
+
+                const response = await fetch(`${serverUrl}/pairs/${chainId}/${pairId}`);
+                
+                if (!response.ok) {
+                    throw new Error('Token not found');
+                }
+
+                const data = await response.json();
+                if (!data.pair) {
+                    throw new Error('No pair data found');
+                }
+
+                displayAnalysis(data.pair);
+            } catch (error) {
+                showMessage(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function loadTop10() {
+            const chainId = document.getElementById('chainSelect').value;
+            const container = document.getElementById('top10Results');
+            
+            container.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading...</p></div>';
+
+            try {
+                const response = await fetch(`${serverUrl}/top-tokens/${chainId}`);
+                
+                if (!response.ok) {
+                    throw new Error('Failed to load tokens');
+                }
+
+                const data = await response.json();
+                const pairs = data.pairs || [];
+
+                if (pairs.length === 0) {
+                    throw new Error('No tokens found');
+                }
+
+                let html = '<div class="tokens-grid">';
+                pairs.forEach((pair, idx) => {
+                    const change = parseFloat(pair.priceChange?.h24) || 0;
+                    const changeClass = change >= 0 ? 'positive' : 'negative';
+                    
+                    html += `
+                        <div class="token-card" onclick="displayAnalysis(${JSON.stringify(pair).replace(/"/g, '&quot;')})">
+                            <div class="token-rank">#${idx + 1}</div>
+                            <div class="token-name">${pair.baseToken?.name || 'Unknown'}</div>
+                            <div class="token-symbol">${pair.baseToken?.symbol || 'N/A'}</div>
+                            <div class="token-price">$${formatPrice(parseFloat(pair.priceUsd))}</div>
+                            <div class="token-info">
+                                <span class="${changeClass}">24h: ${change.toFixed(2)}%</span>
+                            </div>
+                            <div class="token-info">Vol: $${formatNumber(pair.volume?.h24 || 0)}</div>
+                            <div class="token-info">Liq: $${formatNumber(pair.liquidity?.usd || 0)}</div>
+                            <button class="analyze-btn" onclick="displayAnalysis(${JSON.stringify(pair).replace(/"/g, '&quot;')}); return false;">Analyze</button>
+                        </div>
+                    `;
+                });
+                html += '</div>';
+
+                container.innerHTML = html;
+                showMessage(`✅ Loaded ${pairs.length} real tokens`, 'success');
+            } catch (error) {
+                container.innerHTML = `<div class="message error">❌ ${error.message}</div>`;
+            }
+        }
+
+        function displayAnalysis(pair) {
+            const price = parseFloat(pair.priceUsd) || 0;
+            const volume = pair.volume?.h24 || 0;
+            const liq = pair.liquidity?.usd || 0;
+            const buys = pair.txns?.h24?.buys || pair.txns?.h24?.buy || 0;
+            const sells = pair.txns?.h24?.sells || pair.txns?.h24?.sell || 0;
+            const ratio = sells > 0 ? (buys / sells).toFixed(2) : 'N/A';
+            const change24h = parseFloat(pair.priceChange?.h24) || 0;
+
+            let score = 50;
+            if (buys > 1000) score += 15;
+            if (ratio > 1.5) score += 15;
+            if (liq > 500000) score += 15;
+            if (volume > 5000000) score += 10;
+            score = Math.min(score, 100);
+
+            let rec = '🟡 HOLD';
+            if (score >= 80) rec = '🟢 BUY';
+            else if (score >= 65) rec = '🟢 BUY';
+            else if (score >= 35) rec = '🔴 SELL';
+
+            let risk = 'HIGH';
+            if (score >= 75) risk = 'LOW';
+            else if (score >= 55) risk = 'MED';
+
+            const html = `
+                <div class="dashboard">
+                    <div class="card">
+                        <h2>📊 Info</h2>
+                        <div class="metric">
+                            <span class="metric-label">Name</span>
+                            <span class="metric-value">${pair.baseToken?.name || 'Unknown'}</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Symbol</span>
+                            <span class="metric-value">${pair.baseToken?.symbol || 'N/A'}</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Price</span>
+                            <span class="metric-value">$${formatPrice(price)}</span>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h2>⚡ Score</h2>
+                        <div class="score-circle">${Math.round(score)}</div>
+                        <div class="metric">
+                            <span class="metric-label">Rec</span>
+                            <span class="metric-value">${rec}</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Risk</span>
+                            <span class="metric-value">${risk}</span>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h2>📈 Trades</h2>
+                        <div class="metric">
+                            <span class="metric-label">Total</span>
+                            <span class="metric-value">${(buys + sells).toLocaleString()}</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Buys</span>
+                            <span class="metric-value positive">${buys.toLocaleString()}</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Sells</span>
+                            <span class="metric-value negative">${sells.toLocaleString()}</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Ratio</span>
+                            <span class="metric-value">${ratio}</span>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h2>💧 Liquidity</h2>
+                        <div class="metric">
+                            <span class="metric-label">Liquidity</span>
+                            <span class="metric-value">$${formatNumber(liq)}</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Volume</span>
+                            <span class="metric-value">$${formatNumber(volume)}</span>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h2>📊 Change</h2>
+                        <div class="metric">
+                            <span class="metric-label">24h</span>
+                            <span class="metric-value ${change24h >= 0 ? 'positive' : 'negative'}">${change24h.toFixed(2)}%</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('analysisContainer').innerHTML = html;
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.getElementById('analysisView').classList.add('active');
+            showMessage(`✅ Real data from ${pair.dexId || 'DEX'}`, 'success');
+        }
+
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.getElementById(tabName).classList.add('active');
+            event.target.classList.add('active');
+            currentView = tabName;
+        }
+
+        function backToList() {
+            document.getElementById('analysisView').classList.add('hidden');
+            document.getElementById(currentView).classList.add('active');
+        }
+
+        function formatPrice(price) {
+            if (price === 0) return '0';
+            if (price < 0.000001) return price.toExponential(2);
+            if (price < 1) return price.toFixed(8);
+            return price.toFixed(2);
+        }
+
+        function formatNumber(num) {
+            if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
+            if (num >= 1000) return (num / 1000).toFixed(2) + 'K';
+            return num.toFixed(0);
+        }
+
+        function showMessage(msg, type) {
+            const container = document.getElementById('messageContainer');
+            container.innerHTML = `<div class="message ${type}">${msg}</div>`;
+            setTimeout(() => container.innerHTML = '', 4000);
+        }
+
+        window.addEventListener('load', () => {
+            checkServerConnection();
+            showMessage('💡 Real data from Dexscreener via proxy server', 'info');
+        });
+    </script>
+</body>
+</html>
