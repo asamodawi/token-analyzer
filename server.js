@@ -118,7 +118,12 @@ app.get('/all-pairs/:chainId', async (req, res) => {
 });
 
 // Serve frontend (optional - put your HTML in public folder)
-app.use(express.static('public'));
+// Serve frontend HTML
+app.get('/', (req, res) => {
+  res.sendFile(__dirname + '/index.html');
+});
+
+app.use(express.static('.'));
 
 // Start server
 const PORT = process.env.PORT || 3000;
