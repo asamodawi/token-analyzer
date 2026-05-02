@@ -417,6 +417,7 @@
 
     <script>
         let currentView = 'search';
+        let currentPair = null;
         let serverUrl = 'https://token-analyzer-proxy.onrender.com';
 
         // Check server connection
@@ -464,7 +465,7 @@
                     const changeClass = change >= 0 ? 'positive' : 'negative';
                     
                     html += `
-                        <div class="token-card" onclick="displayAnalysis(${JSON.stringify(pair).replace(/"/g, '&quot;')})">
+                        <div class="token-card">
                             <div class="token-rank">#${idx + 1}</div>
                             <div class="token-name">${pair.baseToken?.name || 'Unknown'}</div>
                             <div class="token-symbol">${pair.baseToken?.symbol || 'N/A'}</div>
@@ -474,12 +475,14 @@
                             </div>
                             <div class="token-info">Vol: $${formatNumber(pair.volume?.h24 || 0)}</div>
                             <div class="token-info">Liq: $${formatNumber(pair.liquidity?.usd || 0)}</div>
-                            <button class="analyze-btn" onclick="displayAnalysis(${JSON.stringify(pair).replace(/"/g, '&quot;')}); return false;">Analyze</button>
+                            <button class="analyze-btn" onclick="analyzePair(${idx})">Analyze</button>
                         </div>
                     `;
                 });
                 html += '</div>';
 
+                // Store pairs for later use
+                window.searchPairs = pairs.slice(0, 10);
                 document.getElementById('searchResults').innerHTML = html;
                 showMessage(`✅ Found ${pairs.length} tokens`, 'success');
             } catch (error) {
@@ -513,7 +516,7 @@
                     const changeClass = change >= 0 ? 'positive' : 'negative';
                     
                     html += `
-                        <div class="token-card" onclick="displayAnalysis(${JSON.stringify(pair).replace(/"/g, '&quot;')})">
+                        <div class="token-card">
                             <div class="token-rank">#${idx + 1}</div>
                             <div class="token-name">${pair.baseToken?.name || 'Unknown'}</div>
                             <div class="token-symbol">${pair.baseToken?.symbol || 'N/A'}</div>
@@ -523,20 +526,48 @@
                             </div>
                             <div class="token-info">Vol: $${formatNumber(pair.volume?.h24 || 0)}</div>
                             <div class="token-info">Liq: $${formatNumber(pair.liquidity?.usd || 0)}</div>
-                            <button class="analyze-btn" onclick="displayAnalysis(${JSON.stringify(pair).replace(/"/g, '&quot;')}); return false;">Analyze</button>
+                            <button class="analyze-btn" onclick="analyzeTopPair(${idx})">Analyze</button>
                         </div>
                     `;
                 });
                 html += '</div>';
 
-                container.innerHTML = html;
+                // Store pairs for later use
+                window.topPairs = pairs;
+                document.getElementById('top10Results').innerHTML = html;
                 showMessage(`✅ Loaded ${pairs.length} real tokens from ${chainId}`, 'success');
             } catch (error) {
                 container.innerHTML = `<div class="message error">❌ ${error.message}</div>`;
             }
         }
 
-        function displayAnalysis(pair) {
+        // Analyze from search results
+        function analyzePair(index) {
+            if (!window.searchPairs || !window.searchPairs[index]) {
+                showMessage('Error: Pair not found', 'error');
+                return;
+            }
+            currentPair = window.searchPairs[index];
+            displayAnalysis();
+        }
+
+        // Analyze from top 10 results
+        function analyzeTopPair(index) {
+            if (!window.topPairs || !window.topPairs[index]) {
+                showMessage('Error: Pair not found', 'error');
+                return;
+            }
+            currentPair = window.topPairs[index];
+            displayAnalysis();
+        }
+
+        function displayAnalysis() {
+            if (!currentPair) {
+                showMessage('Error: No pair selected', 'error');
+                return;
+            }
+
+            const pair = currentPair;
             const price = parseFloat(pair.priceUsd) || 0;
             const volume = pair.volume?.h24 || 0;
             const liq = pair.liquidity?.usd || 0;
@@ -653,7 +684,7 @@
             document.getElementById('analysisContainer').innerHTML = html;
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
             document.getElementById('analysisView').classList.add('active');
-            showMessage(`✅ Real data from Dexscreener`, 'success');
+            showMessage(`✅ Analysis: ${pair.baseToken?.symbol || 'Token'} on ${pair.chainId}`, 'success');
         }
 
         function switchTab(tabName) {
