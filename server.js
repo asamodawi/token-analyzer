@@ -1,6 +1,6 @@
 // server.js
 // Simple Express server to proxy Dexscreener API requests
-// No CORS issues, works with both desktop and mobile apps
+// With rate limiting and caching to prevent 429 errors
 
 const express = require('express');
 const cors = require('cors');
@@ -12,6 +12,45 @@ app.use(express.json());
 
 const DEXSCREENER_API = 'https://api.dexscreener.com/latest';
 
+// Rate limiting and caching
+const requestCache = new Map();
+const CACHE_DURATION = 30000; // 30 seconds cache
+const REQUEST_DELAY = 500; // 500ms between requests
+
+let lastRequestTime = 0;
+
+function getCacheKey(method, url) {
+    return `${method}:${url}`;
+}
+
+function isCached(key) {
+    if (!requestCache.has(key)) return false;
+    const cached = requestCache.get(key);
+    if (Date.now() - cached.timestamp > CACHE_DURATION) {
+        requestCache.delete(key);
+        return false;
+    }
+    return true;
+}
+
+function getFromCache(key) {
+    return requestCache.get(key)?.data;
+}
+
+function setCache(key, data) {
+    requestCache.set(key, { data, timestamp: Date.now() });
+}
+
+async function throttledRequest(url) {
+    // Wait if requests are coming too fast
+    const timeSinceLastRequest = Date.now() - lastRequestTime;
+    if (timeSinceLastRequest < REQUEST_DELAY) {
+        await new Promise(resolve => setTimeout(resolve, REQUEST_DELAY - timeSinceLastRequest));
+    }
+    lastRequestTime = Date.now();
+    return axios.get(url, { timeout: 10000 });
+}
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'Server running', timestamp: new Date() });
@@ -21,10 +60,18 @@ app.get('/health', (req, res) => {
 app.get('/pairs/:chainId/:pairId', async (req, res) => {
   try {
     const { chainId, pairId } = req.params;
-    const response = await axios.get(
-      `${DEXSCREENER_API}/dex/pairs/${chainId}/${pairId}`,
-      { timeout: 10000 }
+    const cacheKey = getCacheKey('GET', `/pairs/${chainId}/${pairId}`);
+    
+    if (isCached(cacheKey)) {
+        console.log(`[CACHE HIT] pairs ${chainId}/${pairId}`);
+        return res.json(getFromCache(cacheKey));
+    }
+    
+    const response = await throttledRequest(
+      `${DEXSCREENER_API}/dex/pairs/${chainId}/${pairId}`
     );
+    
+    setCache(cacheKey, response.data);
     res.json(response.data);
   } catch (error) {
     console.error('Error fetching pair:', error.message);
@@ -36,12 +83,21 @@ app.get('/pairs/:chainId/:pairId', async (req, res) => {
 app.get('/search', async (req, res) => {
   try {
     const { q, chainId } = req.query;
-    let url = `${DEXSCREENER_API}/dex/search?q=${encodeURIComponent(q || '*')}`;
+    const searchQuery = q || '*';
+    const cacheKey = getCacheKey('GET', `/search?q=${searchQuery}&chainId=${chainId || ''}`);
+    
+    if (isCached(cacheKey)) {
+        console.log(`[CACHE HIT] search ${searchQuery}`);
+        return res.json(getFromCache(cacheKey));
+    }
+    
+    let url = `${DEXSCREENER_API}/dex/search?q=${encodeURIComponent(searchQuery)}`;
     if (chainId) {
       url += `&chainId=${chainId}`;
     }
     
-    const response = await axios.get(url, { timeout: 10000 });
+    const response = await throttledRequest(url);
+    setCache(cacheKey, response.data);
     res.json(response.data);
   } catch (error) {
     console.error('Error searching:', error.message);
@@ -53,9 +109,15 @@ app.get('/search', async (req, res) => {
 app.get('/top-tokens/:chainId', async (req, res) => {
   try {
     const { chainId } = req.params;
-    const response = await axios.get(
-      `${DEXSCREENER_API}/dex/search?chainId=${chainId}`,
-      { timeout: 10000 }
+    const cacheKey = getCacheKey('GET', `/top-tokens/${chainId}`);
+    
+    if (isCached(cacheKey)) {
+        console.log(`[CACHE HIT] top-tokens ${chainId}`);
+        return res.json(getFromCache(cacheKey));
+    }
+    
+    const response = await throttledRequest(
+      `${DEXSCREENER_API}/dex/search?chainId=${chainId}`
     );
     
     // Sort by volume and limit to top 20
@@ -64,7 +126,9 @@ app.get('/top-tokens/:chainId', async (req, res) => {
       .sort((a, b) => (b.volume?.h24 || 0) - (a.volume?.h24 || 0))
       .slice(0, 20);
     
-    res.json({ pairs });
+    const result = { pairs };
+    setCache(cacheKey, result);
+    res.json(result);
   } catch (error) {
     console.error('Error fetching top tokens:', error.message);
     res.status(500).json({ error: error.message });
@@ -74,11 +138,19 @@ app.get('/top-tokens/:chainId', async (req, res) => {
 // Proxy: Get token profiles (trending)
 app.get('/token-profiles/:type', async (req, res) => {
   try {
-    const { type } = req.params; // 'latest' or 'recent-updates'
-    const response = await axios.get(
-      `${DEXSCREENER_API}/../token-profiles/${type}/v1`,
-      { timeout: 10000 }
+    const { type } = req.params;
+    const cacheKey = getCacheKey('GET', `/token-profiles/${type}`);
+    
+    if (isCached(cacheKey)) {
+        console.log(`[CACHE HIT] token-profiles ${type}`);
+        return res.json(getFromCache(cacheKey));
+    }
+    
+    const response = await throttledRequest(
+      `${DEXSCREENER_API}/../token-profiles/${type}/v1`
     );
+    
+    setCache(cacheKey, response.data);
     res.json(response.data);
   } catch (error) {
     console.error('Error fetching token profiles:', error.message);
@@ -89,11 +161,19 @@ app.get('/token-profiles/:type', async (req, res) => {
 // Proxy: Get token boosts (trending tokens)
 app.get('/token-boosts/:type', async (req, res) => {
   try {
-    const { type } = req.params; // 'latest' or 'top'
-    const response = await axios.get(
-      `${DEXSCREENER_API}/../token-boosts/${type}/v1`,
-      { timeout: 10000 }
+    const { type } = req.params;
+    const cacheKey = getCacheKey('GET', `/token-boosts/${type}`);
+    
+    if (isCached(cacheKey)) {
+        console.log(`[CACHE HIT] token-boosts ${type}`);
+        return res.json(getFromCache(cacheKey));
+    }
+    
+    const response = await throttledRequest(
+      `${DEXSCREENER_API}/../token-boosts/${type}/v1`
     );
+    
+    setCache(cacheKey, response.data);
     res.json(response.data);
   } catch (error) {
     console.error('Error fetching token boosts:', error.message);
@@ -101,23 +181,6 @@ app.get('/token-boosts/:type', async (req, res) => {
   }
 });
 
-// Proxy: Get all pairs for a chain (for top tokens)
-app.get('/all-pairs/:chainId', async (req, res) => {
-  try {
-    const { chainId } = req.params;
-    // Use wildcard search to get multiple pairs
-    const response = await axios.get(
-      `${DEXSCREENER_API}/dex/search?q=*&chainId=${chainId}`,
-      { timeout: 15000 }
-    );
-    res.json(response.data);
-  } catch (error) {
-    console.error('Error fetching all pairs:', error.message);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Serve frontend (optional - put your HTML in public folder)
 // Serve frontend HTML
 app.get('/', (req, res) => {
   res.sendFile(__dirname + '/index.html');
