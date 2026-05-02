@@ -386,7 +386,7 @@
             <!-- TAB 1: SEARCH -->
             <div id="search" class="tab-content active">
                 <div class="controls">
-                    <input type="text" id="searchInput" placeholder="Search token (RAY, SOL, ETH, etc)" />
+                    <input type="text" id="searchInput" placeholder="Search token (RAY, JUP, SOL, ETH)" />
                     <button onclick="searchToken()" style="width: auto;">Search</button>
                 </div>
                 <div id="searchResults"></div>
@@ -439,7 +439,7 @@
         async function searchToken() {
             const input = document.getElementById('searchInput').value.trim();
             if (!input) {
-                showMessage('Enter token name (RAY, SOL, ETH, etc)', 'error');
+                showMessage('Enter token name (RAY, JUP, SOL, etc)', 'error');
                 return;
             }
 
@@ -463,25 +463,28 @@
                 pairs.slice(0, 10).forEach((pair, idx) => {
                     const change = parseFloat(pair.priceChange?.h24) || 0;
                     const changeClass = change >= 0 ? 'positive' : 'negative';
+                    const price = parseFloat(pair.priceUsd) || 0;
+                    const volume = pair.volume?.h24 || 0;
+                    const liq = pair.liquidity?.usd || 0;
                     
                     html += `
                         <div class="token-card">
                             <div class="token-rank">#${idx + 1}</div>
                             <div class="token-name">${pair.baseToken?.name || 'Unknown'}</div>
                             <div class="token-symbol">${pair.baseToken?.symbol || 'N/A'}</div>
-                            <div class="token-price">$${formatPrice(parseFloat(pair.priceUsd))}</div>
+                            <div class="token-price">$${formatPrice(price)}</div>
                             <div class="token-info">
                                 <span class="${changeClass}">24h: ${change.toFixed(2)}%</span>
                             </div>
-                            <div class="token-info">Vol: $${formatNumber(pair.volume?.h24 || 0)}</div>
-                            <div class="token-info">Liq: $${formatNumber(pair.liquidity?.usd || 0)}</div>
+                            <div class="token-info">Vol: $${formatNumber(volume)}</div>
+                            <div class="token-info">Liq: $${formatNumber(liq)}</div>
                             <button class="analyze-btn" onclick="analyzePair(${idx})">Analyze</button>
                         </div>
                     `;
                 });
                 html += '</div>';
 
-                // Store pairs for later use
+                // Store pairs
                 window.searchPairs = pairs.slice(0, 10);
                 document.getElementById('searchResults').innerHTML = html;
                 showMessage(`✅ Found ${pairs.length} tokens`, 'success');
@@ -494,7 +497,7 @@
             const chainId = document.getElementById('chainSelect').value;
             const container = document.getElementById('top10Results');
             
-            container.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading...</p></div>';
+            container.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading top 10 tokens...</p></div>';
 
             try {
                 const response = await fetch(`${serverUrl}/top-tokens/${chainId}`);
@@ -507,41 +510,43 @@
                 const pairs = data.pairs || [];
 
                 if (pairs.length === 0) {
-                    throw new Error('No tokens found');
+                    throw new Error('No tokens found for this chain');
                 }
 
                 let html = '<div class="tokens-grid">';
-                pairs.forEach((pair, idx) => {
+                pairs.slice(0, 10).forEach((pair, idx) => {
                     const change = parseFloat(pair.priceChange?.h24) || 0;
                     const changeClass = change >= 0 ? 'positive' : 'negative';
+                    const price = parseFloat(pair.priceUsd) || 0;
+                    const volume = pair.volume?.h24 || 0;
+                    const liq = pair.liquidity?.usd || 0;
                     
                     html += `
                         <div class="token-card">
                             <div class="token-rank">#${idx + 1}</div>
                             <div class="token-name">${pair.baseToken?.name || 'Unknown'}</div>
                             <div class="token-symbol">${pair.baseToken?.symbol || 'N/A'}</div>
-                            <div class="token-price">$${formatPrice(parseFloat(pair.priceUsd))}</div>
+                            <div class="token-price">$${formatPrice(price)}</div>
                             <div class="token-info">
                                 <span class="${changeClass}">24h: ${change.toFixed(2)}%</span>
                             </div>
-                            <div class="token-info">Vol: $${formatNumber(pair.volume?.h24 || 0)}</div>
-                            <div class="token-info">Liq: $${formatNumber(pair.liquidity?.usd || 0)}</div>
+                            <div class="token-info">Vol: $${formatNumber(volume)}</div>
+                            <div class="token-info">Liq: $${formatNumber(liq)}</div>
                             <button class="analyze-btn" onclick="analyzeTopPair(${idx})">Analyze</button>
                         </div>
                     `;
                 });
                 html += '</div>';
 
-                // Store pairs for later use
+                // Store pairs
                 window.topPairs = pairs;
-                document.getElementById('top10Results').innerHTML = html;
-                showMessage(`✅ Loaded ${pairs.length} real tokens from ${chainId}`, 'success');
+                container.innerHTML = html;
+                showMessage(`✅ Loaded ${pairs.length} tokens from ${chainId}`, 'success');
             } catch (error) {
                 container.innerHTML = `<div class="message error">❌ ${error.message}</div>`;
             }
         }
 
-        // Analyze from search results
         function analyzePair(index) {
             if (!window.searchPairs || !window.searchPairs[index]) {
                 showMessage('Error: Pair not found', 'error');
@@ -551,7 +556,6 @@
             displayAnalysis();
         }
 
-        // Analyze from top 10 results
         function analyzeTopPair(index) {
             if (!window.topPairs || !window.topPairs[index]) {
                 showMessage('Error: Pair not found', 'error');
@@ -571,8 +575,8 @@
             const price = parseFloat(pair.priceUsd) || 0;
             const volume = pair.volume?.h24 || 0;
             const liq = pair.liquidity?.usd || 0;
-            const buys = pair.txns?.h24?.buys || pair.txns?.h24?.buy || 0;
-            const sells = pair.txns?.h24?.sells || pair.txns?.h24?.sell || 0;
+            const buys = pair.txns?.h24?.buys || 0;
+            const sells = pair.txns?.h24?.sells || 0;
             const ratio = sells > 0 ? (buys / sells).toFixed(2) : 'N/A';
             const change24h = parseFloat(pair.priceChange?.h24) || 0;
 
@@ -595,7 +599,7 @@
             const html = `
                 <div class="dashboard">
                     <div class="card">
-                        <h2>📊 Info</h2>
+                        <h2>📊 Token Info</h2>
                         <div class="metric">
                             <span class="metric-label">Name</span>
                             <span class="metric-value">${pair.baseToken?.name || 'Unknown'}</span>
@@ -608,74 +612,38 @@
                             <span class="metric-label">Price</span>
                             <span class="metric-value">$${formatPrice(price)}</span>
                         </div>
-                        <div class="metric">
-                            <span class="metric-label">Chain</span>
-                            <span class="metric-value">${pair.chainId?.toUpperCase() || 'Unknown'}</span>
-                        </div>
                     </div>
 
                     <div class="card">
                         <h2>⚡ Score</h2>
                         <div class="score-circle">${Math.round(score)}</div>
                         <div class="metric">
-                            <span class="metric-label">Rec</span>
+                            <span class="metric-label">Recommendation</span>
                             <span class="metric-value">${rec}</span>
                         </div>
                         <div class="metric">
-                            <span class="metric-label">Risk</span>
+                            <span class="metric-label">Risk Level</span>
                             <span class="metric-value">${risk}</span>
                         </div>
                     </div>
 
                     <div class="card">
-                        <h2>📈 Trades (24h)</h2>
-                        <div class="metric">
-                            <span class="metric-label">Total</span>
-                            <span class="metric-value">${(buys + sells).toLocaleString()}</span>
-                        </div>
-                        <div class="metric">
-                            <span class="metric-label">Buys</span>
-                            <span class="metric-value positive">${buys.toLocaleString()}</span>
-                        </div>
-                        <div class="metric">
-                            <span class="metric-label">Sells</span>
-                            <span class="metric-value negative">${sells.toLocaleString()}</span>
-                        </div>
-                        <div class="metric">
-                            <span class="metric-label">Ratio</span>
-                            <span class="metric-value">${ratio}</span>
-                        </div>
-                    </div>
-
-                    <div class="card">
-                        <h2>💧 Liquidity</h2>
-                        <div class="metric">
-                            <span class="metric-label">Liquidity</span>
-                            <span class="metric-value">$${formatNumber(liq)}</span>
-                        </div>
+                        <h2>📈 Volume (24h)</h2>
                         <div class="metric">
                             <span class="metric-label">Volume</span>
                             <span class="metric-value">$${formatNumber(volume)}</span>
                         </div>
+                        <div class="metric">
+                            <span class="metric-label">Liquidity</span>
+                            <span class="metric-value">$${formatNumber(liq)}</span>
+                        </div>
                     </div>
 
                     <div class="card">
-                        <h2>📊 Change</h2>
+                        <h2>📊 Price Change</h2>
                         <div class="metric">
-                            <span class="metric-label">24h</span>
+                            <span class="metric-label">24h Change</span>
                             <span class="metric-value ${change24h >= 0 ? 'positive' : 'negative'}">${change24h.toFixed(2)}%</span>
-                        </div>
-                    </div>
-
-                    <div class="card">
-                        <h2>🔗 Details</h2>
-                        <div class="metric">
-                            <span class="metric-label">DEX</span>
-                            <span class="metric-value">${pair.dexId || 'Unknown'}</span>
-                        </div>
-                        <div class="metric">
-                            <span class="metric-label">Source</span>
-                            <span class="metric-value">Dexscreener</span>
                         </div>
                     </div>
                 </div>
@@ -684,7 +652,7 @@
             document.getElementById('analysisContainer').innerHTML = html;
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
             document.getElementById('analysisView').classList.add('active');
-            showMessage(`✅ Analysis: ${pair.baseToken?.symbol || 'Token'} on ${pair.chainId}`, 'success');
+            showMessage(`✅ Analysis loaded`, 'success');
         }
 
         function switchTab(tabName) {
