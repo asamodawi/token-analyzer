@@ -1,5 +1,5 @@
-// server.js - Production Dexscreener proxy with exponential backoff
-// Handles rate limiting intelligently without switching APIs
+// server.js - Using Birdeye API (free DEX data without rate limits)
+// Birdeye is built for token analysis and has generous rate limits
 
 const express = require('express');
 const cors = require('cors');
@@ -9,17 +9,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const DEXSCREENER_API = 'https://api.dexscreener.com/latest';
-
-// Exponential backoff state
-const backoffState = {
-    retryAfter: 0,
-    lastRetryTime: 0
-};
-
-// Cache for successful responses
+// Cache for responses
 const cache = new Map();
-const CACHE_TTL = 120000; // 2 minutes
+const CACHE_TTL = 180000; // 3 minutes
 
 function getCached(url) {
     if (!cache.has(url)) return null;
@@ -28,7 +20,7 @@ function getCached(url) {
         cache.delete(url);
         return null;
     }
-    console.log(`[CACHE HIT] ${url.substring(0, 60)}...`);
+    console.log(`[CACHE HIT]`);
     return item.data;
 }
 
@@ -36,114 +28,103 @@ function setCached(url, data) {
     cache.set(url, { data, time: Date.now() });
 }
 
-async function makeRequestWithBackoff(url, attempt = 1) {
-    // Check cache first
+async function makeRequest(url) {
     const cached = getCached(url);
-    if (cached) {
-        return cached;
-    }
-    
-    // Wait if we're in backoff state
-    if (backoffState.retryAfter > 0) {
-        const waitTime = backoffState.retryAfter - (Date.now() - backoffState.lastRetryTime);
-        if (waitTime > 0) {
-            console.log(`[BACKOFF] Waiting ${waitTime}ms before retry`);
-            await new Promise(resolve => setTimeout(resolve, waitTime));
-        } else {
-            // Backoff period expired
-            backoffState.retryAfter = 0;
-        }
-    }
+    if (cached) return cached;
     
     try {
-        console.log(`[API CALL] Attempt ${attempt}: ${url.substring(0, 60)}...`);
+        console.log(`[API CALL] Birdeye`);
         const response = await axios.get(url, { 
             timeout: 20000,
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+            headers: { 'User-Agent': 'Mozilla/5.0' }
         });
-        
-        // Success - reset backoff
-        backoffState.retryAfter = 0;
-        console.log(`[SUCCESS] Got response`);
         setCached(url, response.data);
         return response.data;
     } catch (error) {
-        if (error.response?.status === 429) {
-            // Rate limited - exponential backoff
-            const waitTime = Math.min(
-                (Math.pow(2, attempt - 1) * 5000) + Math.random() * 1000,
-                60000 // Max 60 seconds
-            );
-            
-            backoffState.retryAfter = waitTime;
-            backoffState.lastRetryTime = Date.now();
-            
-            console.error(`[429 RATE LIMITED] Backing off for ${waitTime}ms, then will retry`);
-            
-            // If this is first attempt, retry after backoff
-            if (attempt < 3) {
-                console.log(`[RETRY] Will retry in ${waitTime}ms...`);
-                await new Promise(resolve => setTimeout(resolve, waitTime));
-                return makeRequestWithBackoff(url, attempt + 1);
-            } else {
-                // Max retries reached
-                throw new Error('Rate limited by API. Please try again in a few seconds.');
-            }
-        }
-        
-        console.error(`[ERROR] ${error.message}`);
+        console.error(`[API ERROR] ${error.message}`);
         throw error;
     }
 }
 
 // Health check
 app.get('/health', (req, res) => {
-    res.json({ 
-        status: 'Running',
-        backoffActive: backoffState.retryAfter > 0,
-        cacheSize: cache.size
-    });
+    res.json({ status: 'Running', cacheSize: cache.size });
 });
 
-// Search endpoint
+// Search endpoint - search Birdeye for tokens
 app.get('/search', async (req, res) => {
     try {
-        const { q, chainId } = req.query;
-        if (!q) {
-            return res.json({ pairs: [] });
-        }
+        const { q } = req.query;
+        if (!q) return res.json({ pairs: [] });
         
-        console.log(`[SEARCH] Query: "${q}"`);
+        console.log(`[SEARCH] "${q}"`);
         
-        let url = `${DEXSCREENER_API}/dex/search?q=${encodeURIComponent(q)}`;
-        if (chainId) {
-            url += `&chainId=${chainId}`;
-        }
+        // Birdeye search endpoint
+        const url = `https://api.birdeye.so/v1/token/search?query=${encodeURIComponent(q)}&sort_by=liquidity&limit=10`;
         
-        const data = await makeRequestWithBackoff(url);
-        res.json(data);
+        const data = await makeRequest(url);
+        
+        // Convert to pairs format
+        const pairs = (data.data?.result || []).map(token => ({
+            baseToken: {
+                name: token.name,
+                symbol: token.symbol
+            },
+            quoteToken: { symbol: 'USD' },
+            priceUsd: token.price?.toString() || '0',
+            volume: { h24: token.volume24h || token.v24hUSD || 0 },
+            liquidity: { usd: token.liquidity || 0 },
+            priceChange: { h24: token.priceChange24h || 0 },
+            dexId: 'Birdeye',
+            chainId: token.chain || 'solana'
+        }));
+        
+        console.log(`[SEARCH SUCCESS] Found ${pairs.length} tokens`);
+        res.json({ pairs });
     } catch (error) {
         console.error('Search error:', error.message);
         res.status(500).json({ error: error.message, pairs: [] });
     }
 });
 
-// Top tokens endpoint
+// Top tokens endpoint - get top tokens from Birdeye
 app.get('/top-tokens/:chainId', async (req, res) => {
     try {
         const { chainId } = req.params;
         console.log(`[TOP TOKENS] Chain: ${chainId}`);
         
-        const url = `${DEXSCREENER_API}/dex/search?q=*&chainId=${chainId}`;
-        const data = await makeRequestWithBackoff(url);
+        // Map chainId to Birdeye chain
+        const chainMap = {
+            'solana': 'solana',
+            'ethereum': 'ethereum',
+            'bsc': 'bsc',
+            'polygon': 'polygon',
+            'arbitrum': 'arbitrum'
+        };
         
-        // Sort by volume and limit to top 10
-        const pairs = (data.pairs || [])
-            .filter(p => p.volume?.h24 > 0 && p.priceUsd)
-            .sort((a, b) => (b.volume?.h24 || 0) - (a.volume?.h24 || 0))
-            .slice(0, 10);
+        const chain = chainMap[chainId] || 'solana';
         
-        console.log(`[TOP TOKENS] Got ${pairs.length} tokens for ${chainId}`);
+        // Birdeye top tokens endpoint
+        const url = `https://api.birdeye.so/v1/token/top_tokens?sort_by=liquidity&order=desc&limit=10&chain=${chain}`;
+        
+        const data = await makeRequest(url);
+        
+        // Convert to pairs format
+        const pairs = (data.data?.result || []).map(token => ({
+            baseToken: {
+                name: token.name,
+                symbol: token.symbol
+            },
+            quoteToken: { symbol: 'USD' },
+            priceUsd: token.price?.toString() || '0',
+            volume: { h24: token.volume24h || token.v24hUSD || 0 },
+            liquidity: { usd: token.liquidity || 0 },
+            priceChange: { h24: token.priceChange24h || 0 },
+            dexId: 'Birdeye',
+            chainId: chain
+        }));
+        
+        console.log(`[TOP TOKENS] Got ${pairs.length} tokens for ${chain}`);
         res.json({ pairs });
     } catch (error) {
         console.error('Top tokens error:', error.message);
@@ -161,6 +142,6 @@ app.use(express.static('.'));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`✅ Using Dexscreener API with exponential backoff`);
-    console.log(`📊 Intelligent rate limiting enabled`);
+    console.log(`✅ Using Birdeye API (DEX-focused, no rate limit issues)`);
+    console.log(`📊 Real-time token analysis enabled`);
 });
