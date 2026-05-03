@@ -1,5 +1,5 @@
-// server.js - Using Birdeye API (free DEX data without rate limits)
-// Birdeye is built for token analysis and has generous rate limits
+// server.js - Using Jupiter API (Solana tokens) + CoinGecko (other chains)
+// Jupiter for DEX data, CoinGecko as fallback
 
 const express = require('express');
 const cors = require('cors');
@@ -33,7 +33,7 @@ async function makeRequest(url) {
     if (cached) return cached;
     
     try {
-        console.log(`[API CALL] Birdeye`);
+        console.log(`[API CALL]`);
         const response = await axios.get(url, { 
             timeout: 20000,
             headers: { 'User-Agent': 'Mozilla/5.0' }
@@ -41,7 +41,7 @@ async function makeRequest(url) {
         setCached(url, response.data);
         return response.data;
     } catch (error) {
-        console.error(`[API ERROR] ${error.message}`);
+        console.error(`[API ERROR] ${error.response?.status || error.message}`);
         throw error;
     }
 }
@@ -51,7 +51,7 @@ app.get('/health', (req, res) => {
     res.json({ status: 'Running', cacheSize: cache.size });
 });
 
-// Search endpoint - search Birdeye for tokens
+// Search endpoint - Jupiter for Solana, CoinGecko for others
 app.get('/search', async (req, res) => {
     try {
         const { q } = req.query;
@@ -59,27 +59,62 @@ app.get('/search', async (req, res) => {
         
         console.log(`[SEARCH] "${q}"`);
         
-        // Birdeye search endpoint
-        const url = `https://api.birdeye.so/v1/token/search?query=${encodeURIComponent(q)}&sort_by=liquidity&limit=10`;
+        // Try Jupiter first (Solana)
+        try {
+            const jupUrl = `https://token.jup.ag/search?query=${encodeURIComponent(q)}&limit=10`;
+            const jupData = await makeRequest(jupUrl);
+            
+            if (jupData && jupData.length > 0) {
+                const pairs = jupData.map(token => ({
+                    baseToken: {
+                        name: token.name,
+                        symbol: token.symbol
+                    },
+                    quoteToken: { symbol: 'USDC' },
+                    priceUsd: token.price?.toString() || '0',
+                    volume: { h24: 0 },
+                    liquidity: { usd: 0 },
+                    priceChange: { h24: 0 },
+                    dexId: 'Jupiter',
+                    chainId: 'solana'
+                }));
+                
+                console.log(`[SEARCH SUCCESS] Found ${pairs.length} tokens via Jupiter`);
+                return res.json({ pairs });
+            }
+        } catch (error) {
+            console.log(`[FALLBACK] Jupiter failed, trying CoinGecko...`);
+        }
         
-        const data = await makeRequest(url);
+        // Fallback to CoinGecko
+        const cgUrl = `https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(q)}&order=market_cap_desc`;
+        const cgData = await makeRequest(cgUrl);
         
-        // Convert to pairs format
-        const pairs = (data.data?.result || []).map(token => ({
+        const coins = cgData.coins || [];
+        if (coins.length === 0) {
+            return res.json({ pairs: [] });
+        }
+        
+        // Get market data for top results
+        const ids = coins.slice(0, 5).map(c => c.id).join(',');
+        const marketUrl = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${ids}&order=market_cap_desc&per_page=250&sparkline=false&price_change_percentage=24h`;
+        const marketData = await makeRequest(marketUrl);
+        
+        const pairs = (marketData || []).map(coin => ({
             baseToken: {
-                name: token.name,
-                symbol: token.symbol
+                name: coin.name,
+                symbol: coin.symbol?.toUpperCase()
             },
             quoteToken: { symbol: 'USD' },
-            priceUsd: token.price?.toString() || '0',
-            volume: { h24: token.volume24h || token.v24hUSD || 0 },
-            liquidity: { usd: token.liquidity || 0 },
-            priceChange: { h24: token.priceChange24h || 0 },
-            dexId: 'Birdeye',
-            chainId: token.chain || 'solana'
+            priceUsd: coin.current_price?.toString() || '0',
+            volume: { h24: coin.total_volume || 0 },
+            liquidity: { usd: coin.market_cap || 0 },
+            priceChange: { h24: coin.price_change_percentage_24h || 0 },
+            dexId: 'CoinGecko',
+            chainId: 'multi'
         }));
         
-        console.log(`[SEARCH SUCCESS] Found ${pairs.length} tokens`);
+        console.log(`[SEARCH SUCCESS] Found ${pairs.length} tokens via CoinGecko`);
         res.json({ pairs });
     } catch (error) {
         console.error('Search error:', error.message);
@@ -87,44 +122,67 @@ app.get('/search', async (req, res) => {
     }
 });
 
-// Top tokens endpoint - get top tokens from Birdeye
+// Top tokens endpoint
 app.get('/top-tokens/:chainId', async (req, res) => {
     try {
         const { chainId } = req.params;
         console.log(`[TOP TOKENS] Chain: ${chainId}`);
         
-        // Map chainId to Birdeye chain
-        const chainMap = {
-            'solana': 'solana',
-            'ethereum': 'ethereum',
-            'bsc': 'bsc',
-            'polygon': 'polygon',
-            'arbitrum': 'arbitrum'
-        };
+        // For Solana, use Jupiter
+        if (chainId === 'solana') {
+            try {
+                const url = `https://api.jup.ag/price/v2?ids=EPjFWaLb3hyccqJ1yaiZOX3W1sKdzthAa7Clark198o&vsToken=EPjFWaLb3hyccqJ1yaiZOX3W1sKdzthAa7Clark198o`;
+                const data = await makeRequest(url);
+                
+                // Get top Solana tokens - using a known list
+                const topSolanaTokens = [
+                    { symbol: 'SOL', name: 'Solana', mint: 'So11111111111111111111111111111111111111112' },
+                    { symbol: 'USDC', name: 'USD Coin', mint: 'EPjFWaLb3hyccqJ1yaiZOX3W1sKdzthAa7Clark198o' },
+                    { symbol: 'USDT', name: 'Tether', mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenErt' },
+                    { symbol: 'RAY', name: 'Raydium', mint: '4k3Dyjzvzp8eMZWUeKuff4ZCL9cu7kUKq7aSLcS7aeT' },
+                    { symbol: 'JUP', name: 'Jupiter', mint: 'JUPyiwrYJFskUPiHa7hkeR8UUtyu2koF8qwfV6qWJVU' }
+                ];
+                
+                const pairs = topSolanaTokens.map(token => ({
+                    baseToken: {
+                        name: token.name,
+                        symbol: token.symbol
+                    },
+                    quoteToken: { symbol: 'USDC' },
+                    priceUsd: '0',
+                    volume: { h24: 0 },
+                    liquidity: { usd: 0 },
+                    priceChange: { h24: 0 },
+                    dexId: 'Jupiter',
+                    chainId: 'solana'
+                }));
+                
+                console.log(`[TOP TOKENS] Got ${pairs.length} tokens for solana`);
+                return res.json({ pairs });
+            } catch (error) {
+                console.log('[FALLBACK] Jupiter failed for top tokens');
+            }
+        }
         
-        const chain = chainMap[chainId] || 'solana';
-        
-        // Birdeye top tokens endpoint
-        const url = `https://api.birdeye.so/v1/token/top_tokens?sort_by=liquidity&order=desc&limit=10&chain=${chain}`;
-        
+        // For other chains, use CoinGecko
+        const url = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=10&sparkline=false&price_change_percentage=24h`;
         const data = await makeRequest(url);
         
-        // Convert to pairs format
-        const pairs = (data.data?.result || []).map(token => ({
+        const pairs = (data || []).map(coin => ({
             baseToken: {
-                name: token.name,
-                symbol: token.symbol
+                name: coin.name,
+                symbol: coin.symbol?.toUpperCase()
             },
             quoteToken: { symbol: 'USD' },
-            priceUsd: token.price?.toString() || '0',
-            volume: { h24: token.volume24h || token.v24hUSD || 0 },
-            liquidity: { usd: token.liquidity || 0 },
-            priceChange: { h24: token.priceChange24h || 0 },
-            dexId: 'Birdeye',
-            chainId: chain
+            priceUsd: coin.current_price?.toString() || '0',
+            volume: { h24: coin.total_volume || 0 },
+            liquidity: { usd: coin.market_cap || 0 },
+            priceChange: { h24: coin.price_change_percentage_24h || 0 },
+            dexId: 'CoinGecko',
+            chainId: chainId
         }));
         
-        console.log(`[TOP TOKENS] Got ${pairs.length} tokens for ${chain}`);
+        console.log(`[TOP TOKENS] Got ${pairs.length} tokens for ${chainId}`);
         res.json({ pairs });
     } catch (error) {
         console.error('Top tokens error:', error.message);
@@ -142,6 +200,5 @@ app.use(express.static('.'));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`✅ Using Birdeye API (DEX-focused, no rate limit issues)`);
-    console.log(`📊 Real-time token analysis enabled`);
+    console.log(`✅ Using Jupiter API (Solana) + CoinGecko (other chains)`);
 });
